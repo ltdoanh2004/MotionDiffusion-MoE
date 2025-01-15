@@ -13,6 +13,7 @@ import codecs as cs
 import torch.distributed as dist
 
 
+# from mmcv.runner import get_dist_info
 from models.gaussian_diffusion import (
     GaussianDiffusion,
     get_named_beta_schedule,
@@ -84,6 +85,7 @@ class DDPMTrainer(object):
 
         self.real_noise = output['target']
         self.fake_noise = output['pred']
+        self.mse_loss = output['mse_loss']
         try:
             self.src_mask = self.encoder.module.generate_src_mask(T, cur_len).to(x_start.device)
         except:
@@ -129,7 +131,7 @@ class DDPMTrainer(object):
     def backward_G(self):
         loss_mot_rec = self.mse_criterion(self.fake_noise, self.real_noise).mean(dim=-1)
         loss_mot_rec = (loss_mot_rec * self.src_mask).sum() / self.src_mask.sum()
-        print(loss_mot_rec)
+        loss_mot_rec = loss_mot_rec + self.mse_loss
         self.loss_mot_rec = loss_mot_rec
         loss_logs = OrderedDict({})
         loss_logs['loss_mot_rec'] = self.loss_mot_rec.item()
@@ -184,6 +186,8 @@ class DDPMTrainer(object):
         if self.opt.is_continue:
             model_dir = pjoin(self.opt.model_dir, 'latest.tar')
             cur_epoch, it = self.load(model_dir)
+        # model_dir = '/home/ltdoanh/jupyter/jupyter/ldtan/MotionDiffuse/t2m/t2m_new_ver2/model/latest.tar'
+        # cur_epoch, it = self.load(model_dir)
         start_time = time.time()
 
         train_loader = build_dataloader(
@@ -192,11 +196,14 @@ class DDPMTrainer(object):
             drop_last=True,
             workers_per_gpu=4,
             shuffle=True)
+            # dist=self.opt.distributed,
+            # num_gpus=len(self.opt.gpu_id))
 
         logs = OrderedDict()
         for epoch in range(cur_epoch, self.opt.num_epochs):
             self.train_mode()
             for i, batch_data in enumerate(train_loader):
+
                 self.forward(batch_data)
                 log_dict = self.update()
                 for k, v in log_dict.items():

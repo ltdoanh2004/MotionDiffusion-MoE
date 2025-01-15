@@ -5,37 +5,15 @@ import torch.nn.functional as F
 from typing import List, Optional
 from transformers import AutoModel, AutoTokenizer
 
-# ------------------------------------------------------------------------
-# 1) Basic Utility and Helper Functions
-# ------------------------------------------------------------------------
-
-def zero_module(module: nn.Module) -> nn.Module:
-    """
-    Zero out the parameters of a module and return it.
-    """
-    for p in module.parameters():
-        p.detach().zero_()
-    return module
-
-
-# ------------------------------------------------------------------------
-# 2) SwitchMoELayer with Top-2 Gating + Simple Load Balancing
-# ------------------------------------------------------------------------
 class SwitchMoELayer(nn.Module):
     """
     Enhanced Switch Transformer MoE layer with:
       - Top-2 gating
       - Simple load balancing
-      - Thematic experts (foot, arm, torso, head, etc.) as an example
-
-    We keep the same signature but internally do top-2 gating.
     """
     def __init__(self, input_dim, hidden_dim, num_experts=8):
         super().__init__()
         self.num_experts = num_experts
-        # e.g., 4 "thematic" experts, or more:
-        # We'll still rely on 'num_experts' though. In a real scenario,
-        # you could name them specifically.
         self.gate = nn.Linear(input_dim, num_experts)
 
         # Create experts
@@ -51,9 +29,18 @@ class SwitchMoELayer(nn.Module):
         nn.init.zeros_(self.gate.weight)
         nn.init.zeros_(self.gate.bias)
 
-        # For load balancing, track how many tokens each expert sees
-        # (very simple approach).
+        # Track usage (number of tokens that picked expert e as top-1)
         self.register_buffer("expert_usage", torch.zeros(num_experts))
+        # Track importance (sum of gate probabilities that go to e)
+        self.register_buffer("expert_importance", torch.zeros(num_experts))
+
+    def _reset_moe_counters(self):
+        """
+        Reset counters at the start of each forward or each training iteration.
+        This is optional but often helpful so that the counters don't keep growing forever.
+        """
+        self.expert_usage.zero_()
+        self.expert_importance.zero_()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -61,52 +48,103 @@ class SwitchMoELayer(nn.Module):
         Returns: (B, T, D) output
         """
         B, T, D = x.shape
-        x_flat = x.view(-1, D)  # [B*T, D]
+        x_flat = x.reshape(-1, D)  # [B*T, D]
         
         # 1) Gating
         logits = self.gate(x_flat)  # [B*T, num_experts]
-        probs = F.softmax(logits, dim=1)
-        # top-2 gating
+        probs = F.softmax(logits, dim=1)  # [B*T, num_experts]
+
+        # ---- top-2 gating ----
         top2_vals, top2_idx = torch.topk(probs, k=2, dim=1)  # each is [B*T, 2]
-        
-        # 2) Compute partial load balancing
-        # We sum how many tokens go to each expert (based on top-1), for illustration
-        top1_idx = top2_idx[:, 0]
-        for e_idx in range(self.num_experts):
-            usage_count = (top1_idx == e_idx).sum().item()
-            self.expert_usage[e_idx] += usage_count
+
+        # 2) Update usage & importance
+        #
+        #    - "usage" is how many tokens pick an expert as top-1
+        #    - "importance" is the sum of the probabilities (here, sum of top-2 or full? 
+        #      But commonly we sum whichever probabilities lead to actual routing)
+        #
+        #    Because these are buffers, we must be sure to do the updates in a no-grad block
+        #    or use in-place modifications that won't break autograd. Typically, usage is
+        #    purely counters. "importance" can also be kept outside the gradient path.
+        #
+
+        # top1 assignments
+        top1_idx = top2_idx[:, 0]  # (B*T,)
+        with torch.no_grad():
+            # Count how many times each expert was top-1
+            for e_idx in range(self.num_experts):
+                usage_count = (top1_idx == e_idx).sum()
+                self.expert_usage[e_idx] += usage_count.item()
+
+            # For importance, we add whichever probabilities contributed
+            # in top-2 gating. (Alternatively, you might add all probs from 'probs'.)
+            for e_idx in range(self.num_experts):
+                # gather the probability for e_idx from top2
+                # mask where top2_idx == e_idx
+                mask_any = (top2_idx == e_idx).any(dim=1)  # [B*T]
+                if mask_any.any():
+                    # For each token that routes e_idx as top-1 or top-2,
+                    # add the corresponding top2_vals
+                    # figure out if e_idx is in the 0th or 1st column
+                    rowcols = torch.nonzero(top2_idx[mask_any] == e_idx)
+                    # rowcols is shape [num_routed, 2], second dim is which column
+                    # rowcols[:, 1] is in {0,1}, giving us the correct top2_val
+                    vals = top2_vals[mask_any, rowcols[:,1]]
+                    self.expert_importance[e_idx] += vals.sum().item()
 
         # 3) Merge outputs from top-2 experts
-        output = torch.zeros_like(x_flat)  # [B*T, D]
+        output = torch.zeros_like(x_flat)
 
         for expert_idx in range(self.num_experts):
-            # Mask for top-2 routing
             mask = (top2_idx == expert_idx)  # [B*T, 2]
             if not mask.any():
                 continue
-            # gather tokens that route to this expert
-            # For each token that has expert_idx in top2_idx,
-            # we add: top2_vals * expert(...) to 'output'.
-            # Because top2_idx has shape [B*T, 2], let's do it carefully:
-
-            # Flatten mask to [B*T], where True if top-2 includes expert_idx
             mask_any = mask.any(dim=1)
             if mask_any.any():
-                expert_input = x_flat[mask_any]  # the tokens going to this expert
-                # pass through the expert
+                expert_input = x_flat[mask_any]
                 expert_output = self.experts[expert_idx](expert_input)
-                
-                # We need to scale by top2_vals. But each token might route with a different weight
-                # we find which column belongs to expert_idx
-                col = (top2_idx[mask_any] == expert_idx).nonzero()[:,1]  # either 0 or 1
-                # gather the corresponding val
-                val = top2_vals[mask_any, col]  # [#(mask_any)]
-                val = val.unsqueeze(-1)  # shape [num_routed, 1]
 
-                # Add to output
+                # find which column belongs to expert_idx
+                col = (top2_idx[mask_any] == expert_idx).nonzero()[:,1]
+                val = top2_vals[mask_any, col].unsqueeze(-1)  # scale factor
                 output[mask_any] += val * expert_output
         
         return output.view(B, T, D)
+
+    def get_load_balancing_loss(self, epsilon: float = 1e-8) -> torch.Tensor:
+        """
+        Compute a scalar load-balancing loss that penalizes large mismatch
+        between 'expert_usage' (actual top-1 counts) and 'expert_importance' (sum of gating probs).
+        
+        We first convert each to a fraction of total usage or total importance.
+        Then we measure how well they align by computing the dot product:
+            sum_{e} fraction_usage[e] * fraction_importance[e]
+        That dot product is in [0,1], and is 1 if usage fraction == importance fraction.
+        
+        A common approach is to *maximize* that dot product, 
+        or equivalently minimize something like: (1 - dot_product).
+        We multiply by num_experts so that, in the ideal case, the loss is 0
+        when dot_product=1, and in the worst case is ~ num_experts if they are disjoint.
+        
+        You can adapt or scale this based on your preference.
+        """
+        # usage fractions
+        total_usage = self.expert_usage.sum().clamp_min(epsilon)
+        fraction_usage = self.expert_usage / total_usage
+
+        # importance fractions
+        total_importance = self.expert_importance.sum().clamp_min(epsilon)
+        fraction_importance = self.expert_importance / total_importance
+
+        # dot product in [0..1]
+        alignment = (fraction_usage * fraction_importance).sum()
+
+        # One common form:  load_balance_loss = num_experts * (1.0 - alignment)
+        # If alignment=1, loss=0 => perfectly balanced
+        # If alignment=0, loss=num_experts => severely unbalanced
+        load_balance_loss = self.num_experts * (1.0 - alignment)
+        return load_balance_loss
+
 
 
 # ------------------------------------------------------------------------
@@ -722,9 +760,22 @@ class EnhancedTextEncoder(nn.Module):
         return pooled, projected
 
 
+
+
 # ------------------------------------------------------------------------
 # 14) Multi-Scale (U-Net–like) MotionTransformer
 # ------------------------------------------------------------------------
+
+def zero_module(module):
+    """
+    Zero out the parameters of a module and return it.
+    Used for final output layer to stabilize training.
+    """
+    for p in module.parameters():
+        p.detach().zero_()
+    return module 
+
+
 class MotionTransformer(nn.Module):
     """
     We wrap your original approach with:
@@ -818,7 +869,27 @@ class MotionTransformer(nn.Module):
         # final out
         self.out = zero_module(nn.Linear(latent_dim, input_feats))
 
-
+  
+    def reset_all_moe_counters(self, model):
+        for module in model.modules():
+            if isinstance(module, SwitchMoELayer):
+                module._reset_moe_counters()
+                
+    def get_total_moe_loss(self, model, moe_coef=0.01):
+        total_moe_loss = 0.0
+        for module in model.modules():
+            if isinstance(module, SwitchMoELayer):
+                total_moe_loss += module.get_load_balancing_loss()
+        return moe_coef * total_moe_loss
+    
+    def get_moe_loss(self, model):
+        for module in model.modules():
+                # You could also do something like hasattr(module, "get_load_balancing_loss")
+                # if you prefer a more general check.
+                if isinstance(module, SwitchMoELayer):
+                    moe_loss += module.get_load_balancing_loss()
+        return moe_loss
+    
     def encode_text(self, text: List[str], device: torch.device):
         return self.text_encoder(text, device)
 

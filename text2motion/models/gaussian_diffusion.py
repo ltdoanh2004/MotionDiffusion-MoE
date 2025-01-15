@@ -68,6 +68,8 @@ def betas_for_alpha_bar(num_diffusion_timesteps, alpha_bar, max_beta=0.999):
     return np.array(betas)
 
 
+
+
 # ------------------------------------------------------------------------------------------
 # ScheduleSampler and New AdaptiveLossSampler
 # ------------------------------------------------------------------------------------------
@@ -889,6 +891,8 @@ class GaussianDiffusion:
     # Training Losses
     # --------------------------------------------------------------------------------------
 
+
+
     def _vb_terms_bpd(
         self, model, x_start, x_t, t, clip_denoised=True, model_kwargs=None
     ):
@@ -925,6 +929,8 @@ class GaussianDiffusion:
         x_t = self.q_sample(x_start, t, noise=noise)
 
         terms = {}
+        
+        model.reset_all_moe_counters(model)
 
         if self.loss_type == LossType.KL or self.loss_type == LossType.RESCALED_KL:
             terms["loss"] = self._vb_terms_bpd(
@@ -937,7 +943,7 @@ class GaussianDiffusion:
             )["output"]
             if self.loss_type == LossType.RESCALED_KL:
                 terms["loss"] *= self.num_timesteps
-
+        
         elif self.loss_type == LossType.MSE or self.loss_type == LossType.RESCALED_MSE:
             model_output = model(x_t, self._scale_timesteps(t), **model_kwargs)
 
@@ -969,7 +975,15 @@ class GaussianDiffusion:
             terms["mse"] = mean_flat((target - model_output) ** 2).view(-1)
             terms["target"] = target
             terms["pred"]   = model_output
+            # ------------------------------------------------------------------------------
+            #  ADD THE MOE LOAD-BALANCING LOSS
+            # ------------------------------------------------------------------------------
+            moe_loss = 0.0
+            # If your MoE class is SwitchMoELayer, gather the load-balancing loss:
+            moe_loss = moe_loss + model.get_moe_loss(model)
 
+            # Optionally store it in `terms` for logging:
+            terms["moe_loss"] = moe_loss
         else:
             raise NotImplementedError(self.loss_type)
 
