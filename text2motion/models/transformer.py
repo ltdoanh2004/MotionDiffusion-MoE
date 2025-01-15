@@ -4,6 +4,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import List, Optional
 from transformers import AutoModel, AutoTokenizer
+from torch.nn.utils import weight_norm
+from torch.nn import GroupNorm
 
 class SwitchMoELayer(nn.Module):
     """
@@ -775,6 +777,114 @@ def zero_module(module):
         p.detach().zero_()
     return module 
 
+
+class NormalizationBlock(nn.Module):
+    def __init__(self, dim, num_groups=8):
+        super().__init__()
+        self.norm = nn.Sequential(
+            GroupNorm(num_groups, dim),
+            nn.LayerNorm(dim)
+        )
+        
+    def forward(self, x):
+        return self.norm(x)
+
+class EnhancedStylizationBlock(nn.Module):
+    def __init__(self, latent_dim, time_embed_dim, dropout, num_groups=8):
+        super().__init__()
+        self.group_norm = GroupNorm(num_groups, latent_dim)
+        self.layer_norm = nn.LayerNorm(latent_dim)
+        
+        self.emb_layers = nn.Sequential(
+            nn.SiLU(),
+            weight_norm(nn.Linear(time_embed_dim, 2 * latent_dim)),
+            nn.Dropout(p=dropout)
+        )
+        
+        self.out_layers = nn.Sequential(
+            nn.SiLU(),
+            nn.Dropout(p=dropout),
+            weight_norm(nn.Linear(latent_dim, latent_dim)),
+            GroupNorm(num_groups, latent_dim)
+        )
+
+    def forward(self, h, emb):
+        # Apply dual normalization
+        h = self.group_norm(h)
+        h = self.layer_norm(h)
+        
+        emb_out = self.emb_layers(emb).unsqueeze(1)
+        scale, shift = torch.chunk(emb_out, 2, dim=2)
+        
+        h = h * (1 + scale) + shift
+        h = self.out_layers(h)
+        return h
+
+class EnhancedMoELayer(nn.Module):
+    def __init__(self, input_dim, hidden_dim, num_experts=8, num_groups=8):
+        super().__init__()
+        self.num_experts = num_experts
+        self.input_norm = NormalizationBlock(input_dim, num_groups)
+        
+        self.gate = weight_norm(nn.Linear(input_dim, num_experts))
+        self.experts = nn.ModuleList([
+            nn.Sequential(
+                GroupNorm(num_groups, input_dim),
+                weight_norm(nn.Linear(input_dim, hidden_dim)),
+                nn.GELU(),
+                nn.Dropout(0.1),
+                weight_norm(nn.Linear(hidden_dim, input_dim)),
+                GroupNorm(num_groups, input_dim)
+            ) for _ in range(num_experts)
+        ])
+        
+        # Initialize gates
+        nn.init.zeros_(self.gate.weight)
+        nn.init.zeros_(self.gate.bias)
+
+    def forward(self, x):
+        B, T, D = x.shape
+        
+        # Apply input normalization
+        x = self.input_norm(x)
+        
+        # Compute gates
+        gates = F.softmax(self.gate(x), dim=-1)
+        
+        # Expert computation with residual
+        expert_outputs = torch.zeros_like(x)
+        for i, expert in enumerate(self.experts):
+            expert_output = expert(x)
+            expert_outputs += gates[..., i:i+1] * expert_output
+            
+        return expert_outputs
+
+class EnhancedTransformerBlock(nn.Module):
+    def __init__(self, dim, num_heads, mlp_ratio=4, dropout=0.1, num_groups=8):
+        super().__init__()
+        self.norm1 = NormalizationBlock(dim, num_groups)
+        self.attn = nn.MultiheadAttention(dim, num_heads, dropout=dropout)
+        self.norm2 = NormalizationBlock(dim, num_groups)
+        self.mlp = nn.Sequential(
+            weight_norm(nn.Linear(dim, dim * mlp_ratio)),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            weight_norm(nn.Linear(dim * mlp_ratio, dim)),
+            GroupNorm(num_groups, dim)
+        )
+        
+    def forward(self, x):
+        # First normalization and attention
+        normed = self.norm1(x)
+        attn_output, _ = self.attn(normed, normed, normed)
+        x = x + attn_output
+        
+        # Second normalization and MLP
+        normed = self.norm2(x)
+        mlp_output = self.mlp(normed)
+        x = x + mlp_output
+        
+        return x
 
 class MotionTransformer(nn.Module):
     """
