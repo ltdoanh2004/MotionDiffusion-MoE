@@ -68,6 +68,8 @@ def betas_for_alpha_bar(num_diffusion_timesteps, alpha_bar, max_beta=0.999):
     return np.array(betas)
 
 
+
+
 # ------------------------------------------------------------------------------------------
 # ScheduleSampler and New AdaptiveLossSampler
 # ------------------------------------------------------------------------------------------
@@ -383,11 +385,13 @@ class GaussianDiffusion:
         model_var_type,
         loss_type,
         rescale_timesteps=False,
+        cfg_scale=7.5,
     ):
         self.model_mean_type = model_mean_type
         self.model_var_type = model_var_type
         self.loss_type = loss_type
         self.rescale_timesteps = rescale_timesteps
+        self.cfg_scale = cfg_scale
 
         # Use float64 for accuracy
         betas = np.array(betas, dtype=np.float64)
@@ -889,6 +893,8 @@ class GaussianDiffusion:
     # Training Losses
     # --------------------------------------------------------------------------------------
 
+
+
     def _vb_terms_bpd(
         self, model, x_start, x_t, t, clip_denoised=True, model_kwargs=None
     ):
@@ -925,6 +931,8 @@ class GaussianDiffusion:
         x_t = self.q_sample(x_start, t, noise=noise)
 
         terms = {}
+        
+        model.reset_all_moe_counters(model)
 
         if self.loss_type == LossType.KL or self.loss_type == LossType.RESCALED_KL:
             terms["loss"] = self._vb_terms_bpd(
@@ -937,7 +945,7 @@ class GaussianDiffusion:
             )["output"]
             if self.loss_type == LossType.RESCALED_KL:
                 terms["loss"] *= self.num_timesteps
-
+        
         elif self.loss_type == LossType.MSE or self.loss_type == LossType.RESCALED_MSE:
             model_output = model(x_t, self._scale_timesteps(t), **model_kwargs)
 
@@ -969,7 +977,15 @@ class GaussianDiffusion:
             terms["mse"] = mean_flat((target - model_output) ** 2).view(-1)
             terms["target"] = target
             terms["pred"]   = model_output
+            # ------------------------------------------------------------------------------
+            #  ADD THE MOE LOAD-BALANCING LOSS
+            # ------------------------------------------------------------------------------
+            moe_loss = 0.0
+            # If your MoE class is SwitchMoELayer, gather the load-balancing loss:
+            moe_loss = moe_loss + model.get_moe_loss(model)
 
+            # Optionally store it in `terms` for logging:
+            terms["moe_loss"] = moe_loss
         else:
             raise NotImplementedError(self.loss_type)
 
@@ -1022,3 +1038,104 @@ class GaussianDiffusion:
             "xstart_mse": xstart_mse,
             "mse": mse,
         }
+
+    def p_sample_with_cfg(
+        self,
+        model,
+        x,
+        t,
+        clip_denoised=True,
+        denoised_fn=None,
+        model_kwargs=None,
+        cfg_scale=7.5,
+    ):
+        """
+        Sample with classifier-free guidance
+        """
+        if model_kwargs is None:
+            model_kwargs = {}
+            
+        # Get unconditional model kwargs by setting text to empty
+        uncond_kwargs = model_kwargs.copy()
+        uncond_kwargs["text"] = [""] * len(model_kwargs["text"])  # Empty text
+        uncond_kwargs["xf_proj"] = None  # Clear text embeddings
+        uncond_kwargs["xf_out"] = None
+        
+        # Get both conditional and unconditional predictions
+        out_cond = self.p_mean_variance(
+            model, x, t, clip_denoised=clip_denoised, 
+            denoised_fn=denoised_fn, model_kwargs=model_kwargs
+        )
+        out_uncond = self.p_mean_variance(
+            model, x, t, clip_denoised=clip_denoised,
+            denoised_fn=denoised_fn, model_kwargs=uncond_kwargs
+        )
+        
+        # Perform guidance
+        e_t = out_uncond["pred_xstart"]
+        e_t_cond = out_cond["pred_xstart"]
+        
+        # Combine predictions with guidance
+        guided_pred = e_t + cfg_scale * (e_t_cond - e_t)
+        
+        # Update prediction
+        out = out_cond.copy()
+        out["pred_xstart"] = guided_pred
+        
+        # Compute new mean based on guided prediction
+        new_mean, _, _ = self.q_posterior_mean_variance(
+            x_start=guided_pred,
+            x_t=x,
+            t=t
+        )
+        out["mean"] = new_mean
+        
+        # Sample with guidance
+        noise = torch.randn_like(x)
+        nonzero_mask = (t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
+        sample = out["mean"] + nonzero_mask * torch.exp(0.5 * out["log_variance"]) * noise
+        
+        return {"sample": sample, "pred_xstart": out["pred_xstart"]}
+
+    def p_sample_loop_with_cfg(
+        self,
+        model,
+        shape,
+        noise=None,
+        clip_denoised=True,
+        denoised_fn=None,
+        model_kwargs=None,
+        device=None,
+        progress=False,
+        cfg_scale=7.5,
+    ):
+        """
+        Generate samples with classifier-free guidance
+        """
+        if device is None:
+            device = next(model.parameters()).device
+        if noise is None:
+            noise = torch.randn(*shape, device=device)
+        x_t = noise
+
+        if progress:
+            from tqdm.auto import tqdm
+            timesteps = tqdm(reversed(range(0, self.num_timesteps)), desc='Sampling')
+        else:
+            timesteps = reversed(range(0, self.num_timesteps))
+
+        for t in timesteps:
+            t_batch = torch.tensor([t] * shape[0], device=device)
+            with torch.no_grad():
+                out = self.p_sample_with_cfg(
+                    model,
+                    x_t,
+                    t_batch,
+                    clip_denoised=clip_denoised,
+                    denoised_fn=denoised_fn,
+                    model_kwargs=model_kwargs,
+                    cfg_scale=cfg_scale,
+                )
+                x_t = out["sample"]
+                
+        return x_t
