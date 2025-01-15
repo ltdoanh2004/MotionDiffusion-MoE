@@ -13,7 +13,6 @@ import codecs as cs
 import torch.distributed as dist
 
 
-# from mmcv.runner import get_dist_info
 from models.gaussian_diffusion import (
     GaussianDiffusion,
     get_named_beta_schedule,
@@ -185,8 +184,6 @@ class DDPMTrainer(object):
         if self.opt.is_continue:
             model_dir = pjoin(self.opt.model_dir, 'latest.tar')
             cur_epoch, it = self.load(model_dir)
-        # model_dir = '/home/ltdoanh/jupyter/jupyter/ldtan/MotionDiffuse/t2m/t2m_new_ver2/model/latest.tar'
-        # cur_epoch, it = self.load(model_dir)
         start_time = time.time()
 
         train_loader = build_dataloader(
@@ -195,8 +192,6 @@ class DDPMTrainer(object):
             drop_last=True,
             workers_per_gpu=4,
             shuffle=True)
-            # dist=self.opt.distributed,
-            # num_gpus=len(self.opt.gpu_id))
 
         logs = OrderedDict()
         for epoch in range(cur_epoch, self.opt.num_epochs):
@@ -217,8 +212,8 @@ class DDPMTrainer(object):
                     logs = OrderedDict()
                     print_current_loss(start_time, it, mean_loss, epoch, inner_iter=i)
 
-                # if it % self.opt.save_latest == 0 :
-                #     self.save(pjoin(self.opt.model_dir, 'latest.tar'), epoch, it)
+                if it % self.opt.save_latest == 0 :
+                    self.save(pjoin(self.opt.model_dir, 'latest.tar'), epoch, it)
 
             self.save(pjoin(self.opt.model_dir, 'latest.tar'), epoch, it)
 
