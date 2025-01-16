@@ -7,7 +7,7 @@ import enum
 import math
 import numpy as np
 import torch as th
-
+import torch
 from abc import ABC, abstractmethod
 import torch.distributed as dist
 
