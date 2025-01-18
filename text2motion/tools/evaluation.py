@@ -1,8 +1,9 @@
 from datetime import datetime
 import numpy as np
 import torch
+import os
 import sys
-sys.path.append('/home/ltdoanh/jupyter/jupyter/ldtan/MotionDiffuse/text2motion')
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))  # Add parent directory to path
 from datasets1 import get_dataset_motion_loader, get_motion_loader
 from models import MotionTransformer
 from utils.get_opt import get_opt

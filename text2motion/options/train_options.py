@@ -1,4 +1,4 @@
-from options.base_options import BaseOptions
+from text2motion.options.base_options import BaseOptions
 import argparse
 
 class TrainCompOptions(BaseOptions):
