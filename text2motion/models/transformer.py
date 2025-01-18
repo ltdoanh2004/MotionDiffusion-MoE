@@ -444,6 +444,7 @@ class FastAttention(nn.Module):
         # Apply mask if provided
         if mask is not None:
             mask = mask.to(q.dtype)  # Convert mask to same dtype
+            mask = mask.to(q.device)
             if mask.dim() == 3:  # [B, T, 1]
                 mask = mask.squeeze(-1).unsqueeze(1)  # [B, 1, T]
             k_proj = k_proj * mask.unsqueeze(-1)
@@ -755,7 +756,7 @@ class EnhancedTextEncoder(nn.Module):
             return_dict=True
         )
         hidden_states = outputs.last_hidden_state
-        hidden_states = torch.cat([prompts, hidden_states], dim=1)
+        hidden_states = torch.cat([prompts.to(device), hidden_states], dim=1)
         projected = self.proj(hidden_states)
         
         pooled = torch.mean(projected, dim=1)
@@ -993,6 +994,7 @@ class MotionTransformer(nn.Module):
         return moe_coef * total_moe_loss
     
     def get_moe_loss(self, model):
+        moe_loss = 0
         for module in model.modules():
                 # You could also do something like hasattr(module, "get_load_balancing_loss")
                 # if you prefer a more general check.
@@ -1029,7 +1031,7 @@ class MotionTransformer(nn.Module):
         # 1) text encode
         xf_proj, xf_out = self.encode_text(text, device)
         if xf_proj.shape[-1] != self.latent_dim:
-            text_proj = nn.Linear(xf_proj.shape[-1], self.latent_dim).to(device)
+            text_proj = nn.Linear(xf_proj.shape[-1], self.latent_dim).to(device)  # Ensure it's on the correct device
             xf_proj = text_proj(xf_proj)
 
         # 2) fuse time + text

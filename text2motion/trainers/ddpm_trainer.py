@@ -87,7 +87,7 @@ class DDPMTrainer(object):
 
         self.real_noise = output['target']
         self.fake_noise = output['pred']
-        self.mse_loss = output['mse_loss']
+        self.moe_loss = output["moe_loss"]
         try:
             self.src_mask = self.encoder.module.generate_src_mask(T, cur_len).to(x_start.device)
         except:
@@ -150,7 +150,7 @@ class DDPMTrainer(object):
             t_batch = torch.full((self.motions.shape[0],), t, device=self.device)
             noise = torch.randn_like(self.motions)
             noisy_motion = self.diffusion.q_sample(self.motions, t_batch, noise=noise)
-            pred_noise = self.encoder(noisy_motion, t_batch, text=self.caption)
+            pred_noise = self.encoder(noisy_motion, t_batch, self.m_lens,  text=self.caption)
             prog_loss += F.mse_loss(pred_noise, noise)
         prog_loss = prog_loss / len(t_steps)
         
@@ -161,8 +161,8 @@ class DDPMTrainer(object):
             for t1, t2 in zip(noise_levels[:-1], noise_levels[1:]):
                 x_t1 = self.diffusion.q_sample(x, t1.expand(x.shape[0]))
                 x_t2 = self.diffusion.q_sample(x, t2.expand(x.shape[0]))
-                pred_t1 = self.encoder(x_t1, t1.expand(x.shape[0]), text=self.caption)
-                pred_t2 = self.encoder(x_t2, t2.expand(x.shape[0]), text=self.caption)
+                pred_t1 = self.encoder(x_t1, t1.expand(x.shape[0]), self.m_lens, text=self.caption)
+                pred_t2 = self.encoder(x_t2, t2.expand(x.shape[0]), self.m_lens, text=self.caption)
                 consistency_loss += F.smooth_l1_loss(pred_t1, pred_t2)
             return consistency_loss / (len(noise_levels) - 1)
         
@@ -175,11 +175,32 @@ class DDPMTrainer(object):
             noisy_motion = self.diffusion.q_sample(real_motion, t)
             # Compute structural features (e.g., joint angles, velocities)
             def extract_features(x):
-                joints = x.reshape(x.shape[0], x.shape[1], -1, 3)
-                # Joint angles
-                vectors = joints[:, :, 1:] - joints[:, :, :-1]
-                angles = torch.acos(torch.sum(vectors[:, :, 1:] * vectors[:, :, :-1], dim=-1).clamp(-1, 1))
+                # Print shape info for debugging
+                print(f"Input shape: {x.shape}")
+                
+                # Assuming input shape is (batch_size, seq_len, num_joints * 3)
+                batch_size, seq_len, feat_dim = x.shape
+                
+                if feat_dim % 3 != 0:
+                    raise ValueError(f"Last dimension {feat_dim} must be divisible by 3")
+                    
+                num_joints = feat_dim // 3
+                
+                # Reshape to (batch, seq_len, num_joints, 3)
+                joints = x.reshape(batch_size, seq_len, num_joints, 3)
+                
+                # Calculate joint angles
+                vectors = joints[:, :, 1:] - joints[:, :, :-1]  # Get bone vectors
+                
+                # Normalize vectors
+                vectors_normalized = vectors / (torch.norm(vectors, dim=-1, keepdim=True) + 1e-8)
+                
+                # Compute angles between consecutive bones
+                dot_product = torch.sum(vectors_normalized[:, :, 1:] * vectors_normalized[:, :, :-1], dim=-1)
+                angles = torch.acos(dot_product.clamp(-0.99999, 0.99999))
+                
                 return angles
+
             
             real_struct = extract_features(noisy_motion)
             fake_struct = extract_features(fake_noise)
@@ -228,7 +249,7 @@ class DDPMTrainer(object):
             0.2 * loss_structure +    # Motion structure
             0.1 * loss_prior +        # Physics priors
             0.2 * loss_temporal +     # Temporal coherence
-            self.mse_loss            # Original MSE loss
+            self.moe_loss            # Original MSE loss
         )
         
         self.loss_mot_rec = total_loss
@@ -241,6 +262,7 @@ class DDPMTrainer(object):
             'loss_structure': loss_structure.item(),
             'loss_prior': loss_prior.item(),
             'loss_temporal': loss_temporal.item(),
+            'loss_moe': self.moe_loss.item(),
             'loss_total': total_loss.item()
         })
         
@@ -327,7 +349,7 @@ class DDPMTrainer(object):
             self.train_mode()
             for i, batch_data in enumerate(train_loader):
                 caption, motions, m_lens = batch_data
-                
+                self.m_lens = m_lens
                 # Regular conditional training
                 self.forward(batch_data)
                 loss_logs = self.update()

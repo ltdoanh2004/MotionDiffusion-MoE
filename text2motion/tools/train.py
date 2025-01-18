@@ -1,7 +1,13 @@
 import os
 from os.path import join as pjoin
+# Add project root to PYTHONPATH
 import sys
-sys.path.append('/home/ltdoanh/jupyter/jupyter/ldtan/MotionDiffuse/text2motion')
+
+project_root = '/home/ltdoanh/jupyter/jupyter/ldtan/MotionDiffusion-MoE'
+text2motion_path = os.path.join(project_root, 'text2motion')
+sys.path.append(project_root)
+sys.path.append(text2motion_path)
+
 import utils.paramUtil as paramUtil
 from options.train_options import TrainCompOptions
 from utils.plot_script import *

@@ -2,9 +2,9 @@ from os.path import join as pjoin
 
 import numpy as np
 import os
-from utils.quaternion import *
-from utils.skeleton import Skeleton
-from utils.paramUtil import *
+from text2motion.utils.quaternion import *
+from text2motion.utils.skeleton import Skeleton
+from text2motion.utils.paramUtil import *
 
 import torch
 from tqdm import tqdm
