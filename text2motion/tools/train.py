@@ -115,6 +115,7 @@ def main_worker(local_rank, nprocs, opt):
 if __name__ == '__main__':
     parser = TrainCompOptions()
     opt = parser.parse()
+    # example: torchrun --nproc_per_node=4 train.py --dataset_name t2m --name your_experiment
 
     # Example: if you run with torch.distributed.launch, it will pass local_rank as an arg.
     # Otherwise, define an argument or read from env variables.
