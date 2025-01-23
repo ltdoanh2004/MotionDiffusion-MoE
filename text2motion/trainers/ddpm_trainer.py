@@ -331,8 +331,7 @@ class DDPMTrainer(object):
         if self.opt.is_continue:
             model_dir = pjoin(self.opt.model_dir, 'latest.tar')
             cur_epoch, it = self.load(model_dir)
-        # model_dir = '/home/ltdoanh/jupyter/jupyter/ldtan/MotionDiffuse/t2m/t2m_new_ver2/model/latest.tar'
-        # cur_epoch, it = self.load(model_dir)
+
         start_time = time.time()
 
         train_loader = build_dataloader(
