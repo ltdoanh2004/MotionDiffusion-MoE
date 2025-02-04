@@ -7,7 +7,8 @@ import argparse
 import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
-
+from torch.utils.data.distributed import DistributedSampler
+from torch.utils.data import DataLoader
 # -------------------------------------------------------------------------
 # Add your project root to PYTHONPATH if needed
 # -------------------------------------------------------------------------
@@ -165,13 +166,10 @@ def main():
     # ---------------------------------------------------------------------
     # 9. Training loop
     # ---------------------------------------------------------------------
-    try:
-        trainer.train(train_loader)
-    except Exception as e:
-        # Print any errors clearly (including non-master ranks)
-        print(f"[Rank {rank}] Error: {e}", force=True)
-    finally:
-        dist.destroy_process_group()
+    
+    trainer.train(train_loader)
+   
+    dist.destroy_process_group()
 
 
 if __name__ == '__main__':
