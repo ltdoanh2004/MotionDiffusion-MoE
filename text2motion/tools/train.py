@@ -47,13 +47,26 @@ def build_models(opt, dim_pose: int):
     """
     Build the MotionTransformer model.
     """
+    # encoder = MotionTransformer(
+    #     input_feats=dim_pose,
+    #     num_frames=opt.max_motion_length,
+    #     num_layers=opt.num_layers,
+    #     latent_dim=opt.latent_dim,
+    #     no_clip=opt.no_clip,
+    #     no_eff=opt.no_eff
+    # )
     encoder = MotionTransformer(
         input_feats=dim_pose,
         num_frames=opt.max_motion_length,
-        num_layers=opt.num_layers,
         latent_dim=opt.latent_dim,
-        no_clip=opt.no_clip,
-        no_eff=opt.no_eff
+        ff_size=256,
+        num_layers=opt.num_layers,
+        num_heads=4,
+        dropout=0.1,
+        text_latent_dim=128,
+        moe_num_experts=4,
+        model_size="small",   # e.g., double dims
+        chunk_size=256
     )
     return encoder
 
