@@ -79,7 +79,7 @@ class DDPMTrainer(object):
         cur_len = torch.LongTensor([min(T, m_len) for m_len in  m_lens]).to(self.device)
         t, _ = self.sampler.sample(B, x_start.device)
         output = self.diffusion.training_losses(
-            model=self.encoder,
+            model=self.encoder.module,
             x_start=x_start,
             t=t,
             model_kwargs={"text": caption, "length": cur_len}
