@@ -246,7 +246,8 @@ class DDPMTrainer(object):
         """ Move submodules (like self.mse_criterion) to device. """
         if self.opt.is_train:
             self.mse_criterion.to(device)
-        self._model() = self._model().to(device)
+        model = self._model()
+        model = model.to(device)
 
     def train_mode(self):
         # For DDP, calling self.encoder.train() is okay; it calls module.train() inside
