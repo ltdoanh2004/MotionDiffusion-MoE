@@ -119,7 +119,7 @@ class DDPMTrainer(object):
 
         # NOTE: We pass self._model() to diffusion so that the underlying model is used
         output = self.diffusion.training_losses(
-            model=self.encoder,  # safe to pass the wrapper; inside the forward it's normal
+            model=self._model(),  # safe to pass the wrapper; inside the forward it's normal
             x_start=x_start,
             t=t,
             model_kwargs={"text": caption, "length": cur_len}
@@ -158,7 +158,7 @@ class DDPMTrainer(object):
 
         # If your diffusion code supports p_sample_loop_with_cfg
         output = self.diffusion.p_sample_loop_with_cfg(
-            self.encoder,  # can pass the wrapper
+            self._model(),  # can pass the wrapper
             (B, T, dim_pose),
             clip_denoised=False,
             progress=True,
@@ -237,7 +237,7 @@ class DDPMTrainer(object):
         self.loss_mot_rec.backward()
 
         # Optionally clip gradients
-        clip_grad_norm_(self.encoder.parameters(), max_norm=1.0)
+        clip_grad_norm_(self._model().parameters(), max_norm=1.0)
 
         self.step([self.opt_encoder])
         return loss_logs
@@ -246,14 +246,14 @@ class DDPMTrainer(object):
         """ Move submodules (like self.mse_criterion) to device. """
         if self.opt.is_train:
             self.mse_criterion.to(device)
-        self.encoder = self.encoder.to(device)
+        self._model() = self._model().to(device)
 
     def train_mode(self):
         # For DDP, calling self.encoder.train() is okay; it calls module.train() inside
-        self.encoder.train()
+       self._model().train()
 
     def eval_mode(self):
-        self.encoder.eval()
+        self._model().eval()
 
     def save(self, file_name, ep, total_it):
         """
@@ -294,7 +294,7 @@ class DDPMTrainer(object):
         depending on your usage.
         """
         self.to(self.device)
-        self.opt_encoder = optim.Adam(self.encoder.parameters(), lr=self.opt.lr)
+        self.opt_encoder = optim.Adam(self._model().parameters(), lr=self.opt.lr)
 
         it = 0
         cur_epoch = 0
