@@ -77,7 +77,7 @@ class DDPMTrainer(object):
         """
         m = self._model()
         if hasattr(m, "reset_all_moe_counters"):
-            m.reset_all_moe_counters()
+            m.reset_all_moe_counters(m)
 
     @staticmethod
     def zero_grad(opt_list):
