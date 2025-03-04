@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import List
 from transformers import AutoModel, AutoTokenizer
-class TextEncoder(nn.Module):
+class EnhancedTextEncoder(nn.Module):
     def __init__(self, output_dim: int, dropout: float = 0.1):
         super().__init__()
         self.model_name = "microsoft/deberta-v3-large"

@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
-from stylization import StylizationBlock
+from .stylization import StylizationBlock
+import torch.nn.functional as F
 class FastAttention(nn.Module):
     def __init__(self, dim, num_features=256, ortho=True, head_dim=None, eps=1e-6):
         super().__init__()

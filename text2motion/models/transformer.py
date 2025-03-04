@@ -6,13 +6,13 @@ from typing import List, Optional
 from torch.nn.utils import weight_norm
 from torch.nn import GroupNorm
 
-from switch_moe import SwitchMoELayer
-from gate import GatedFusion
-from fast_attention import DualSelfAttentionBlock, GatedCrossAttention, MemoryEfficientCrossAttentionBlock
-from time import LearnableTimeEmbedding, StochasticDepth
-from multi_branch import MoEMultiBranchFFN
-from text_encoder import TextEncoder
-from utils import zero_module, NormalizationBlock
+from .switch_moe import SwitchMoELayer
+from .gate import GatedFusion
+from .fast_attention import DualSelfAttentionBlock, GatedCrossAttention, MemoryEfficientCrossAttentionBlock
+from .time import LearnableTimeEmbedding, StochasticDepth
+from .multi_branch import MoEMultiBranchFFN
+from .text_encoder import EnhancedTextEncoder
+from .utils import zero_module, NormalizationBlock
 
 class MoEExtendedDecoderLayer(nn.Module):
     """
@@ -206,7 +206,7 @@ class MotionTransformer(nn.Module):
         # Time + text embed
         self.learnable_time_embed = LearnableTimeEmbedding(latent_dim)
         self.gated_fusion = GatedFusion(embed_dim=latent_dim)
-        self.text_encoder = TextEncoder(output_dim=text_latent_dim, dropout=dropout)
+        self.text_encoder = EnhancedTextEncoder(output_dim=text_latent_dim, dropout=dropout)
         self.time_embed = nn.Sequential(
             nn.Linear(latent_dim, self.time_embed_dim),
             nn.SiLU(),
@@ -292,7 +292,9 @@ class MotionTransformer(nn.Module):
                 x: torch.Tensor,
                 timesteps: torch.Tensor,
                 length: torch.Tensor,
-                text: Optional[List[str]]=None) -> torch.Tensor:
+                text: Optional[List[str]]=None,
+                xf_proj = None,
+                xf_out = None) -> torch.Tensor:
         """
         Multi-scale forward pass:
          1) embed input
@@ -305,7 +307,8 @@ class MotionTransformer(nn.Module):
         B, T, D = x.shape
 
         # 1) text encode
-        xf_proj, xf_out = self.encode_text(text, device)
+        if xf_proj is None or xf_out is None:
+            xf_proj, xf_out = self.encode_text(text, x.device)
         if xf_proj.shape[-1] != self.latent_dim:
             text_proj = nn.Linear(xf_proj.shape[-1], self.latent_dim).to(device)  # Ensure it's on the correct device
             xf_proj = text_proj(xf_proj)

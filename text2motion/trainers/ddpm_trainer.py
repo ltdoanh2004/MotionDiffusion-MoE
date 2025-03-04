@@ -319,7 +319,7 @@ class DDPMTrainer(object):
         checkpoint = torch.load(model_dir, map_location=self.device)
         if self.opt.is_train:
             self.opt_encoder.load_state_dict(checkpoint['opt_encoder'])
-        self.encoder.load_state_dict(checkpoint['encoder'], strict=True)
+        self.encoder.load_state_dict(checkpoint['encoder'], strict=False)
         return checkpoint['ep'], checkpoint.get('total_it', 0)
 
     def train(self, train_dataset):

@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn   
+from .utils import zero_module
 
 class StylizationBlock(nn.Module):
     def __init__(self, latent_dim: int, time_embed_dim: int, dropout: float):

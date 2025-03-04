@@ -2,7 +2,7 @@ import os
 import numpy as np
 # import cv2
 from PIL import Image
-from text2motion.utils import paramUtil
+# from utils import paramUtil
 import math
 import time
 import matplotlib.pyplot as plt

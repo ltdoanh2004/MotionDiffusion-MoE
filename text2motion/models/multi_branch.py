@@ -1,7 +1,7 @@
 import torch.nn as nn
 import torch
-from stylization import StylizationBlock
-from switch_moe import SwitchMoELayer
+from .stylization import StylizationBlock
+from .switch_moe import SwitchMoELayer
 class MultiBranchFFN(nn.Module):
     def __init__(self, latent_dim: int, ffn_dim: int,
                  num_branches: int = 4, dropout: float = 0.1,
