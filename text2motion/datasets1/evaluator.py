@@ -21,7 +21,7 @@ class EvaluationDataset(Dataset):
 
         dataloader = DataLoader(dataset, batch_size=1, num_workers=1, shuffle=True)
         epoch, it = trainer.load(pjoin(opt.model_dir, opt.which_epoch + '.tar'))
-        # epoch, it = trainer.load('/home/ltdoanh/jupyter/jupyter/ldtan/MotionDiffuse/t2m/t2m_new_ver2/model/ckpt_e030.tar')
+        # epoch, it = trainer.load('/iridisfs/scratch/tvtn1c23/MotionDiffuse/t2m/t2m_new_ver2/model/ckpt_e030.tar')
         generated_motion = []
         min_mov_length = 10 if opt.dataset_name == 't2m' else 6
 
@@ -172,12 +172,15 @@ class Text2MotionDatasetV2(Dataset):
         length_list = []
         for name in tqdm(id_list):
             try:
+                opt.motion_dir = "/iridisfs/scratch/tvtn1c23/HumanML3D/HumanML3D/new_joint_vecs/" 
                 motion = np.load(pjoin(opt.motion_dir, name + '.npy'))
+                
                 assert not np.isnan(motion).any(), f"NaN detected in motion data for item {name}"
                 if (len(motion)) < min_motion_len or (len(motion) >= 200):
                     continue
                 text_data = []
                 flag = False
+                opt.text_dir = "/iridisfs/scratch/tvtn1c23/HumanML3D/HumanML3D/texts/"
                 with cs.open(pjoin(opt.text_dir, name + '.txt')) as f:
                     for line in f.readlines():
                         text_dict = {}
@@ -316,12 +319,14 @@ def get_dataset_motion_loader(opt_path, batch_size, device):
     # Configurations of T2M dataset and KIT dataset is almost the same
     if opt.dataset_name == 't2m' or opt.dataset_name == 'kit':
         print('Loading dataset %s ...' % opt.dataset_name)
-
+        opt.meta_dir = "/iridisfs/scratch/tvtn1c23/ckpt/t2m/test/meta/"
         mean = np.load(pjoin(opt.meta_dir, 'mean.npy'))
         std = np.load(pjoin(opt.meta_dir, 'std.npy'))
-        path = '/home/ltdoanh/jupyter/jupyter/ldtan/MotionDiffuse/glove'
+        path = '/iridisfs/scratch/tvtn1c23/MotionDiffuse/glove'
         w_vectorizer = WordVectorizer(path, 'our_vab')
-        split_file = pjoin(opt.data_root, 'test.txt')
+        opt.data_root = "/iridisfs/scratch/tvtn1c23/HumanML3D/HumanML3D/"
+        #split_file = pjoin(opt.data_root, 'test.txt')
+        split_file = "/iridisfs/scratch/tvtn1c23/HumanML3D/HumanML3D/test.txt"
         dataset = Text2MotionDatasetV2(opt, mean, std, split_file, w_vectorizer)
         dataloader = DataLoader(dataset, batch_size=batch_size, num_workers=4, drop_last=True,
                                 collate_fn=collate_fn, shuffle=True)
@@ -371,7 +376,7 @@ def get_motion_loader(opt, batch_size, trainer, ground_truth_dataset, mm_num_sam
 
     # Currently the configurations of two datasets are almost the same
     if opt.dataset_name == 't2m' or opt.dataset_name == 'kit':
-        w_vectorizer = WordVectorizer('/home/ltdoanh/jupyter/jupyter/ldtan/MotionDiffuse/glove', 'our_vab')
+        w_vectorizer = WordVectorizer('/iridisfs/scratch/tvtn1c23/MotionDiffuse/glove', 'our_vab')
     else:
         raise KeyError('Dataset not recognized!!')
     print('Generating %s ...' % opt.name)
@@ -400,9 +405,9 @@ def build_models(opt):
                                       output_size=opt.dim_coemb_hidden,
                                       device=opt.device)
 
-    # checkpoint = torch.load(pjoin('/home/ltdoanh/jupyter/jupyter/ldtan/MotionDiffuse', 't2m', 'text_mot_match', 'model', 'finest.tar'),
+    # checkpoint = torch.load(pjoin('/iridisfs/scratch/tvtn1c23/MotionDiffuse', 't2m', 'text_mot_match', 'model', 'finest.tar'),
     #                         map_location=opt.device)
-    checkpoint = torch.load(pjoin('/home/ltdoanh/jupyter/jupyter/ldtan/MotionDiffuse/text_mot_match/model/finest.tar'),map_location=opt.device)
+    checkpoint = torch.load(pjoin('/iridisfs/scratch/tvtn1c23/MotionDiffuse/text_mot_match/model/finest.tar'),map_location=opt.device)
     movement_enc.load_state_dict(checkpoint['movement_encoder'])
     text_enc.load_state_dict(checkpoint['text_encoder'])
     motion_enc.load_state_dict(checkpoint['motion_encoder'])

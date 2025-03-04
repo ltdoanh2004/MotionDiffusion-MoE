@@ -295,6 +295,7 @@ class MotionTransformer(nn.Module):
                 text: Optional[List[str]]=None,
                 xf_proj = None,
                 xf_out = None) -> torch.Tensor:
+
         """
         Multi-scale forward pass:
          1) embed input

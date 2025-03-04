@@ -1,40 +1,36 @@
+#!/usr/bin/env python
+
 import os
 import sys
 import argparse
+
 import torch
 import torch.distributed as dist
-import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
-
-# Add project root to PYTHONPATH
-project_root = '/home/ltdoanh/jupyter/jupyter/ldtan/MotionDiffusion-MoE'
+from torch.utils.data.distributed import DistributedSampler
+from torch.utils.data import DataLoader
+# -------------------------------------------------------------------------
+# Add your project root to PYTHONPATH if needed
+# -------------------------------------------------------------------------
+project_root = "/iridisfs/scratch/tvtn1c23/MotionDiffusion-MoE"
 text2motion_path = os.path.join(project_root, 'text2motion')
 sys.path.append(project_root)
 sys.path.append(text2motion_path)
 
+import numpy as np
+from os.path import join as pjoin
+
 import utils.paramUtil as paramUtil
-from options.train_options import TrainCompOptions
+from options.train_options import TrainCompOptions  # <--- your custom argument parser
 from utils.plot_script import *
 from models import MotionTransformer
 from trainers import DDPMTrainer
 from datasets1 import Text2MotionDataset, build_dataloader
-import numpy as np
-from os.path import join as pjoin
 
-def build_models(opt, dim_pose):
-    encoder = MotionTransformer(
-        input_feats=dim_pose,
-        num_frames=opt.max_motion_length,
-        num_layers=opt.num_layers,
-        latent_dim=opt.latent_dim,
-        no_clip=opt.no_clip,
-        no_eff=opt.no_eff
-    )
-    return encoder
 
-def setup_for_distributed(is_master):
+def setup_for_distributed(is_master: bool):
     """
-    Disables printing when not in master process
+    Disable printing when not on master process.
     """
     import builtins as __builtin__
     builtin_print = __builtin__.print
@@ -46,96 +42,148 @@ def setup_for_distributed(is_master):
 
     __builtin__.print = print
 
-def main_worker(local_rank, nprocs, opt):
-    """
-    Spawns one process per GPU. local_rank is the GPU index within the node.
-    """
-    # 1. Initialize process group
-    dist.init_process_group(backend='nccl', init_method='env://',
-                            world_size=opt.world_size, rank=opt.node_rank * nprocs + local_rank)
-    torch.cuda.set_device(local_rank)
 
-    is_master = (dist.get_rank() == 0)
+def build_models(opt, dim_pose: int):
+    """
+    Build the MotionTransformer model.
+    """
+    # encoder = MotionTransformer(
+    #     input_feats=dim_pose,
+    #     num_frames=opt.max_motion_length,
+    #     num_layers=opt.num_layers,
+    #     latent_dim=opt.latent_dim,
+    #     no_clip=opt.no_clip,
+    #     no_eff=opt.no_eff
+    # )
+    encoder = MotionTransformer(
+        input_feats=dim_pose,
+        num_frames=opt.max_motion_length,
+        latent_dim=opt.latent_dim,
+        ff_size=256,
+        num_layers=opt.num_layers,
+        num_heads=4,
+        dropout=0.1,
+        text_latent_dim=128,
+        moe_num_experts=4,
+        model_size="small",   # e.g., double dims
+        chunk_size=256
+    )
+    return encoder
+
+
+def main():
+    # ---------------------------------------------------------------------
+    # 1. Parse command-line arguments from your custom parser.
+    #    (Adjust if you want to add or remove arguments.)
+    # ---------------------------------------------------------------------
+    parser = TrainCompOptions()
+    opt = parser.parse()  # e.g. '--name test --batch_size 128 --dataset_name t2m ...'
+    opt.save_root = pjoin(opt.checkpoints_dir, opt.dataset_name, opt.name)
+    opt.model_dir = pjoin(opt.save_root, 'model')
+    opt.meta_dir = pjoin(opt.save_root, 'meta')
+    # ---------------------------------------------------------------------
+    # 2. Read environment variables set by torchrun
+    #    e.g. torchrun --nproc_per_node=2 --nnodes=1 --node_rank=0 ...
+    # ---------------------------------------------------------------------
+    local_rank = int(os.environ["LOCAL_RANK"])
+    rank = int(os.environ["RANK"])
+    world_size = int(os.environ["WORLD_SIZE"])
+
+    # ---------------------------------------------------------------------
+    # 3. Initialize the distributed process group
+    # ---------------------------------------------------------------------
+    dist.init_process_group(
+        backend='nccl',
+        init_method='env://',
+        world_size=world_size,
+        rank=rank
+    )
+
+    # ---------------------------------------------------------------------
+    # 4. Setup device and printing
+    # ---------------------------------------------------------------------
+    torch.cuda.set_device(local_rank)
+    opt.device = torch.device(f"cuda:{local_rank}")
+    is_master = (rank == 0)
     setup_for_distributed(is_master)  # Only master prints
 
-    # 2. Build dataset config (same as single GPU)
+    # ---------------------------------------------------------------------
+    # 5. Dataset-specific config
+    # ---------------------------------------------------------------------
     if opt.dataset_name == 't2m':
-        opt.data_root = './HumanML3D/HumanML3D'
+        opt.data_root = '/iridisfs/scratch/tvtn1c23/HumanML3D/HumanML3D'
         opt.motion_dir = pjoin(opt.data_root, 'new_joint_vecs')
-        opt.text_dir = pjoin(opt.data_root, 'texts')
+        opt.text_dir   = pjoin(opt.data_root, 'texts')
         opt.joints_num = 22
-        radius = 4
-        fps = 20
         opt.max_motion_length = 196
         dim_pose = 263
         kinematic_chain = paramUtil.t2m_kinematic_chain
     elif opt.dataset_name == 'kit':
         opt.data_root = './data/KIT-ML'
         opt.motion_dir = pjoin(opt.data_root, 'new_joint_vecs')
-        opt.text_dir = pjoin(opt.data_root, 'texts')
+        opt.text_dir   = pjoin(opt.data_root, 'texts')
         opt.joints_num = 21
-        radius = 240 * 8
-        fps = 12.5
-        dim_pose = 251
         opt.max_motion_length = 196
+        dim_pose = 251
         kinematic_chain = paramUtil.kit_kinematic_chain
     else:
-        raise KeyError('Dataset Does Not Exist')
+        raise KeyError(f"Unknown dataset name: {opt.dataset_name}")
 
     mean = np.load(pjoin(opt.data_root, 'Mean.npy'))
-    std = np.load(pjoin(opt.data_root, 'Std.npy'))
+    std  = np.load(pjoin(opt.data_root, 'Std.npy'))
     train_split_file = pjoin(opt.data_root, 'train.txt')
 
-    # 3. Build model and wrap with DDP
-    encoder = build_models(opt, dim_pose).cuda(local_rank)
-    ddp_encoder = DDP(encoder, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=True)
-
-    # 4. Create trainer
-    trainer = DDPMTrainer(opt, ddp_encoder)
-
-    # 5. Build dataset and dataloader. We must use DistributedSampler.
-    #    (If using your custom build_dataloader, ensure it can handle sampler.)
-    train_dataset = Text2MotionDataset(opt, mean, std, train_split_file, opt.times)
-    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, shuffle=True)
-    train_loader = build_dataloader(
-        train_dataset,
-        samples_per_gpu=opt.batch_size,
-        drop_last=True,
-        workers_per_gpu=4,
-        shuffle=False,  # Turn off shuffle here, because the sampler does it
-        sampler=train_sampler
+    # ---------------------------------------------------------------------
+    # 6. Build model and wrap with DistributedDataParallel (DDP)
+    # ---------------------------------------------------------------------
+    encoder = build_models(opt, dim_pose).to(opt.device)
+    ddp_encoder = DDP(
+        encoder,
+        device_ids=[local_rank],
+        output_device=local_rank,
+        find_unused_parameters=False
     )
 
-    # 6. Train
-    trainer.train(train_loader)
+    # ---------------------------------------------------------------------
+    # 7. Create trainer
+    # ---------------------------------------------------------------------
+    trainer = DDPMTrainer(opt, ddp_encoder)
 
-    # 7. Cleanup
+    # ---------------------------------------------------------------------
+    # 8. Build dataset & distributed sampler & dataloader
+    # ---------------------------------------------------------------------
+    # 1) Create the Dataset
+    train_dataset = Text2MotionDataset(opt, mean, std, train_split_file, opt.times)
+    
+    # 2) Create the distributed sampler
+    train_sampler = DistributedSampler(
+        train_dataset,
+        num_replicas=world_size,  # total number of processes
+        rank=rank,               # index of the current process
+        shuffle=True
+    )
+    
+    # 3) Create a direct DataLoader
+    train_loader = DataLoader(
+        dataset=train_dataset,
+        batch_size=opt.batch_size,  # how many samples per GPU
+        sampler=train_sampler,      # pass the distributed sampler
+        num_workers=4,
+        drop_last=True,
+        shuffle=False,             # Sampler handles shuffling
+        pin_memory=True,           # optional
+        persistent_workers=True    # optional
+    )
+
+
+    # ---------------------------------------------------------------------
+    # 9. Training loop
+    # ---------------------------------------------------------------------
+    
+    trainer.train(train_loader)
+   
     dist.destroy_process_group()
 
+
 if __name__ == '__main__':
-    parser = TrainCompOptions()
-    opt = parser.parse()
-    # example: torchrun --nproc_per_node=4 train.py --dataset_name t2m --name your_experiment
-
-    # Example: if you run with torch.distributed.launch, it will pass local_rank as an arg.
-    # Otherwise, define an argument or read from env variables.
-    # For example:
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--local_rank', type=int, default=0)
-    parser.add_argument('--node_rank', type=int, default=0, help="Rank of this node (0 if single-node)")
-    args, unknown = parser.parse_known_args()
-    opt.local_rank = args.local_rank
-    opt.node_rank = args.node_rank
-
-    # total number of processes = number_of_nodes * nprocs_per_node
-    # If you used --nproc_per_node=4, world_size = 4 * number_of_nodes
-    # This can also come from environment variables set by the launcher.
-    opt.world_size = int(os.environ.get('WORLD_SIZE', 1))
-
-    # For multi-GPU training, you typically do not want manual device assignment outside
-    # the main_worker. So remove or ignore 'opt.device = torch.device("cuda")'
-    # Instead, each process sets its own device.
-
-    # Launch processes
-    nprocs = torch.cuda.device_count()  # Usually #GPUs on the node
-    mp.spawn(main_worker, nprocs=nprocs, args=(nprocs, opt))
+    main()

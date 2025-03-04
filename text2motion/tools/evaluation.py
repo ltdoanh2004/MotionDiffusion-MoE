@@ -3,7 +3,9 @@ import numpy as np
 import torch
 import os
 import sys
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))  # Add parent directory to path
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+ # Add parent directory to path
 from datasets1 import get_dataset_motion_loader, get_motion_loader
 from models import MotionTransformer
 from utils.get_opt import get_opt
@@ -25,10 +27,17 @@ def build_models(opt, dim_pose):
     encoder = MotionTransformer(
         input_feats=dim_pose,
         num_frames=opt.max_motion_length,
-        num_layers=opt.num_layers,
         latent_dim=opt.latent_dim,
-        no_clip=opt.no_clip,
-        no_eff=opt.no_eff)
+        ff_size=256,
+        num_layers=opt.num_layers,
+        num_heads=4,
+        dropout=0.1,
+        text_latent_dim=128,
+        moe_num_experts=4,
+        model_size="small",   # e.g., double dims
+        chunk_size=256
+    )
+    
     return encoder
 
 
@@ -49,11 +58,11 @@ def score(trainers, gt_dataset, dim=3, mm_num_samples=100, mm_num_repeats=10):
         jerk:         Jerk error between original and predicted for each joint
     """
     dataloader = DataLoader(gt_dataset, batch_size=1, num_workers=0, shuffle=True)
-    epoch, it = trainers.load('/home/ltdoanh/jupyter/jupyter/ldtan/MotionDiffuse/t2m/t2m_new_ver2/model/ckpt_e035.tar')
+    epoch, it = trainers.load("/iridisfs/scratch/tvtn1c23/ckpt/t2m/test/model/latest.tar")
     trainers.eval_mode()
     trainers.to(opt.device)
-    mean = np.load('/home/ltdoanh/jupyter/jupyter/ldtan/MotionDiffuse/t2m/t2m_new_ver2/meta/mean.npy')
-    std = np.load('/home/ltdoanh/jupyter/jupyter/ldtan/MotionDiffuse/t2m/t2m_new_ver2/meta/std.npy')
+    mean = np.load("/iridisfs/scratch/tvtn1c23/ckpt/t2m/test/meta/mean.npy")
+    std = np.load("/iridisfs/scratch/tvtn1c23/ckpt/t2m/test/meta/mean.npy")
 
     mm_generated_motions = []
     mm_idxs = np.random.choice(len(gt_dataset), mm_num_samples, replace=False)
@@ -411,15 +420,15 @@ if __name__ == '__main__':
     mm_num_times = 10
     diversity_times = 300
     replication_times = 20
-    batch_size = 256
+    batch_size = 512
     # opt_path = sys.argv[1]
     parser = TestOptions()
     opt = parser.parse()
-    # opt_path = '/home/ltdoanh/jupyter/jupyter/ldtan/HumanML3D/HumanML3D/test.txt
+    # opt_path = '//iridisfs/scratch/tvtn1c23//HumanML3D/HumanML3D/test.txt
     # dataset_opt_path = opt_path
-    dataset_opt_path =  '/home/ltdoanh/jupyter/jupyter/ldtan/MotionDiffuse/t2m/t2m_new_ver2/opt.txt'
-    opt_path = '/home/ltdoanh/jupyter/jupyter/ldtan/MotionDiffuse/t2m/t2m_new_ver2/opt.txt'
-    # dataset_opt_path ='/home/ltdoanh/jupyter/jupyter/ldtan/HumanML3D/HumanML3D/test.txt'
+    dataset_opt_path =  "/iridisfs/scratch/tvtn1c23/ckpt/t2m/test/opt.txt"
+    opt_path = "/iridisfs/scratch/tvtn1c23/ckpt/t2m/test/opt.txt"
+    # dataset_opt_path ='//iridisfs/scratch/tvtn1c23//HumanML3D/HumanML3D/test.txt'
 
     # try:
     #     device_id = int(sys.argv[2])
@@ -428,17 +437,17 @@ if __name__ == '__main__':
     device_id = 0
     device = torch.device('cuda:%d' % device_id if torch.cuda.is_available() else 'cpu')
     torch.cuda.set_device(device_id)
-    mean = np.load('/home/ltdoanh/jupyter/jupyter/ldtan/HumanML3D/HumanML3D/Mean.npy')
-    std = np.load('/home/ltdoanh/jupyter/jupyter/ldtan/HumanML3D/HumanML3D/Std.npy')
+    mean = np.load('/iridisfs/scratch/tvtn1c23/HumanML3D/HumanML3D/Mean.npy')
+    std = np.load('/iridisfs/scratch/tvtn1c23/HumanML3D/HumanML3D/Std.npy')
     opt = get_opt(opt_path, device)
     encoder = build_models(opt, opt.dim_pose)
     trainer = DDPMTrainer(opt, encoder)
-    val_split_file = '/home/ltdoanh/jupyter/jupyter/ldtan/HumanML3D/HumanML3D/val.txt'
-    path = '/home/ltdoanh/jupyter/jupyter/ldtan/MotionDiffuse/glove'
+    val_split_file = '/iridisfs/scratch/tvtn1c2/HumanML3D/HumanML3D/val.txt'
+    path = '/iridisfs/scratch/tvtn1c23/MotionDiffuse/glove'
     w_vectorizer = WordVectorizer(path, 'our_vab')
     # gt_dataset = Text2MotionDataset(opt, mean, std, val_split_file, 50 ,w_vectorizer = w_vectorizer ,eval_mode=True)
     gt_loader, gt_dataset = get_dataset_motion_loader(dataset_opt_path, batch_size, device)
-    with open('/home/ltdoanh/jupyter/jupyter/ldtan/MotionDiffuse/text2motion/output.txt', 'a') as f:
+    with open('/iridisfs/scratch/tvtn1c23/MotionDiffuse/text2motion/output.txt', 'a') as f:
         print("BEGIN_____________________________________________________BEGIN", file=f)
         print("_____________________________________________________________", file=f)
         print("MAE score", file=f)
@@ -471,7 +480,7 @@ if __name__ == '__main__':
         )
     }
     
-    log_file = '/home/ltdoanh/jupyter/jupyter/ldtan/MotionDiffuse/t2m_evaluation.log'
+    log_file = '/iridisfs/scratch/tvtn1c23/MotionDiffuse/t2m_evaluation_512.log'
     evaluation(log_file)
     
 
