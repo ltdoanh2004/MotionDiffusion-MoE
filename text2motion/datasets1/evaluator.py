@@ -1,6 +1,6 @@
 import torch
-from text2motion.utils.word_vectorizer import WordVectorizer, POS_enumerator
-from text2motion.utils.get_opt import get_opt
+from utils.word_vectorizer import WordVectorizer, POS_enumerator
+from utils.get_opt import get_opt
 from models import MotionTransformer
 from torch.utils.data import Dataset, DataLoader
 from os.path import join as pjoin

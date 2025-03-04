@@ -4,7 +4,7 @@ import numpy as np
 import argparse
 from os.path import join as pjoin
 import sys
-sys.path.append('/home/ltdoanh/jupyter/jupyter/ldtan/MotionDiffuse/text2motion')
+sys.path.append('/home/ltdoanh/ldtan/MotionDiffusion-MoE/text2motion')
 import utils.paramUtil as paramUtil
 from torch.utils.data import DataLoader
 from utils.plot_script import *
@@ -27,14 +27,20 @@ def plot_t2m(data, result_path, npy_path, caption):
         np.save(npy_path, joint)
 
 
-def build_models(opt):
+def build_models(opt, dim_pose = 263):
     encoder = MotionTransformer(
-        input_feats=opt.dim_pose,
+        input_feats=dim_pose,
         num_frames=opt.max_motion_length,
-        num_layers=opt.num_layers,
         latent_dim=opt.latent_dim,
-        no_clip=opt.no_clip,
-        no_eff=opt.no_eff)
+        ff_size=256,
+        num_layers=opt.num_layers,
+        num_heads=4,
+        dropout=0.1,
+        text_latent_dim=128,
+        moe_num_experts=4,
+        model_size="small",   # e.g., double dims
+        chunk_size=256
+    )
     return encoder
 
 
@@ -68,7 +74,8 @@ if __name__ == '__main__':
 
     encoder = build_models(opt).to(device)
     trainer = DDPMTrainer(opt, encoder)
-    trainer.load(pjoin(opt.model_dir, opt.which_epoch + '.tar'))
+    # trainer.load(pjoin(opt.model_dir, opt.which_epoch + '.tar'))
+    trainer.load('/home/ltdoanh/ldtan/MotionDiffusion-MoE/ckpt/t2m/ckpt_e030.tar')
 
     trainer.eval_mode()
     trainer.to(opt.device)
@@ -80,8 +87,7 @@ if __name__ == '__main__':
             m_lens = torch.LongTensor([args.motion_length]).to(device)
             pred_motions = trainer.generate(caption, m_lens, opt.dim_pose)
             motion = pred_motions[0].cpu().numpy()
-            print(motion.shape)
 
             motion = motion * std + mean
-            title = ''
+            title = 'args.text'
             plot_t2m(motion, args.result_path, args.npy_path, title)

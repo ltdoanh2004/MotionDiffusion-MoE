@@ -283,10 +283,9 @@ class DDPMTrainer(object):
             self.opt_encoder.load_state_dict(checkpoint['opt_encoder'])
         # If using DDP, load state into self.encoder.module
         try:
-            self.encoder.module.load_state_dict(checkpoint['encoder'], strict=True)
+            self.encoder.module.load_state_dict(checkpoint['encoder'], strict=False)
         except AttributeError:
-            self.encoder.load_state_dict(checkpoint['encoder'], strict=True)
-
+            self.encoder.load_state_dict(checkpoint['encoder'], strict=False)
         return checkpoint['ep'], checkpoint.get('total_it', 0)
 
     def train(self, train_dataset):
