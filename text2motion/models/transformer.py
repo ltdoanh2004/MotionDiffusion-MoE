@@ -1016,7 +1016,8 @@ class MotionTransformer(nn.Module):
                 x: torch.Tensor,
                 timesteps: torch.Tensor,
                 length: torch.Tensor,
-                text: Optional[List[str]]=None) -> torch.Tensor:
+                text: Optional[List[str]]=None,
+                xf_proj=None, xf_out=None) -> torch.Tensor:
         """
         Multi-scale forward pass:
          1) embed input
@@ -1029,7 +1030,9 @@ class MotionTransformer(nn.Module):
         B, T, D = x.shape
 
         # 1) text encode
-        xf_proj, xf_out = self.encode_text(text, device)
+        
+        if xf_proj is None or xf_out is None:
+            xf_proj, xf_out = self.encode_text(text, x.device)
         if xf_proj.shape[-1] != self.latent_dim:
             text_proj = nn.Linear(xf_proj.shape[-1], self.latent_dim).to(device)  # Ensure it's on the correct device
             xf_proj = text_proj(xf_proj)

@@ -102,6 +102,7 @@ class DDPMTrainer(object):
         4. Extracts noise predictions & MoE loss (if any).
         """
         caption, motions, m_lens = batch_data
+        
         motions = motions.detach().to(self.device).float()
 
         self.caption = caption
@@ -299,7 +300,8 @@ class DDPMTrainer(object):
 
         it = 0
         cur_epoch = 0
-        if self.opt.is_continue:
+        #if self.opt.is_continue:
+        if True:
             model_dir = pjoin(self.opt.model_dir, 'latest.tar')
             cur_epoch, it = self.load(model_dir)
 
